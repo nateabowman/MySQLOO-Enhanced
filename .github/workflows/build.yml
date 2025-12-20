@@ -1,0 +1,177 @@
+name: Build MySQLOO
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  release:
+    types: [ created ]
+  workflow_call:
+    inputs:
+      os_filter:
+        description: 'Filter builds by OS (linux, windows, or empty for all)'
+        type: string
+        required: false
+        default: ''
+      arch_filter:
+        description: 'Filter builds by architecture (x86, x64, or empty for all)'
+        type: string
+        required: false
+        default: ''
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux 32-bit
+          - os: linux
+            arch: x86
+            runner: ubuntu-22.04
+            cmake_arch: -m32
+            artifact_name: gmsv_mysqloo_linux.dll
+
+          # Linux 64-bit
+          - os: linux
+            arch: x64
+            runner: ubuntu-22.04
+            cmake_arch: -m64
+            artifact_name: gmsv_mysqloo_linux64.dll
+
+          # Windows 32-bit
+          - os: windows
+            arch: x86
+            runner: windows-latest
+            cmake_arch: Win32
+            artifact_name: gmsv_mysqloo_win32.dll
+
+          # Windows 64-bit
+          - os: windows
+            arch: x64
+            runner: windows-latest
+            cmake_arch: x64
+            artifact_name: gmsv_mysqloo_win64.dll
+
+    container: ${{ matrix.os == 'linux' && 'debian:11' || null }}
+
+    steps:
+      - name: Install git
+        if: matrix.os == 'linux'
+        run: |
+          apt-get update
+          apt-get install -y git
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Linux dependencies (32-bit)
+        if: matrix.os == 'linux' && matrix.arch == 'x86'
+        run: |
+          dpkg --add-architecture i386
+          apt-get update
+          apt-get install -y build-essential gcc-multilib g++-multilib ninja-build curl zip unzip tar pkg-config wget
+
+      - name: Install Linux dependencies (64-bit)
+        if: matrix.os == 'linux' && matrix.arch == 'x64'
+        run: |
+          apt-get update
+          apt-get install -y build-essential ninja-build curl zip unzip tar pkg-config wget
+
+      - name: Install modern CMake (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          wget -q https://github.com/Kitware/CMake/releases/download/v3.27.9/cmake-3.27.9-linux-x86_64.sh
+          chmod +x cmake-3.27.9-linux-x86_64.sh
+          ./cmake-3.27.9-linux-x86_64.sh --skip-license --prefix=/usr/local
+          cmake --version
+
+      - name: Setup vcpkg cache (Linux)
+        if: matrix.os == 'linux'
+        uses: actions/cache@v4
+        with:
+          path: ~/.vcpkg
+          key: vcpkg-debian11-${{ matrix.arch }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-debian11-${{ matrix.arch }}-
+
+      - name: Setup MSVC (Windows)
+        if: matrix.os == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+
+      - name: Setup vcpkg cache (Windows)
+        if: matrix.os == 'windows'
+        uses: actions/cache@v4
+        with:
+          path: ~\vcpkg
+          key: vcpkg-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ matrix.os }}-${{ matrix.arch }}-
+
+      - name: Build (Linux x86)
+        if: matrix.os == 'linux' && matrix.arch == 'x86'
+        run: chmod +x build.sh && ./build.sh linux-x86-release
+
+      - name: Build (Linux x64)
+        if: matrix.os == 'linux' && matrix.arch == 'x64'
+        run: chmod +x build.sh && ./build.sh linux-x64-release
+
+      - name: Build (Windows x86)
+        if: matrix.os == 'windows' && matrix.arch == 'x86'
+        run: .\build.ps1 windows-x86-release
+
+      - name: Build (Windows x64)
+        if: matrix.os == 'windows' && matrix.arch == 'x64'
+        run: .\build.ps1 windows-x64-release
+
+      - name: Prepare artifact (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          mkdir -p artifact
+          find . -name "gmsv_mysqloo_*.dll" -type f -exec cp {} artifact/${{ matrix.artifact_name }} \;
+
+      - name: Prepare artifact (Windows)
+        if: matrix.os == 'windows'
+        run: |
+          New-Item -ItemType Directory -Force -Path artifact
+          Get-ChildItem -Recurse -Filter "gmsv_mysqloo_*.dll" | Copy-Item -Destination "artifact\${{ matrix.artifact_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: artifact/${{ matrix.artifact_name }}
+          if-no-files-found: error
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: ls -R artifacts/
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/gmsv_mysqloo_win32.dll/gmsv_mysqloo_win32.dll
+            artifacts/gmsv_mysqloo_win64.dll/gmsv_mysqloo_win64.dll
+            artifacts/gmsv_mysqloo_linux.dll/gmsv_mysqloo_linux.dll
+            artifacts/gmsv_mysqloo_linux64.dll/gmsv_mysqloo_linux64.dll
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

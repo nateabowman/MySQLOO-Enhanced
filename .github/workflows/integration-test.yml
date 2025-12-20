@@ -1,0 +1,176 @@
+name: Integration Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_linux_x86:
+        description: 'Test Linux 32-bit'
+        type: boolean
+        default: true
+      test_linux_x64:
+        description: 'Test Linux 64-bit'
+        type: boolean
+        default: true
+  release:
+    types: [ created ]
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      os_filter: 'linux'
+      arch_filter: ''
+
+  test:
+    name: Test Linux ${{ matrix.arch }}
+    needs: build
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86
+            artifact_name: gmsv_mysqloo_linux.dll
+            srcds_binary: srcds_run
+          - arch: x64
+            artifact_name: gmsv_mysqloo_linux64.dll
+            srcds_binary: srcds_run_x64
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: testpassword
+          MYSQL_DATABASE: mysqloo_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      - name: Check if test should run
+        id: should_run
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]] || \
+             ([[ "${{ github.event_name }}" == "workflow_dispatch" ]] && \
+              [[ ("${{ matrix.arch }}" == "x86" && "${{ inputs.test_linux_x86 }}" == "true") || \
+                 ("${{ matrix.arch }}" == "x64" && "${{ inputs.test_linux_x64 }}" == "true") ]]); then
+            echo "run=true" >> $GITHUB_OUTPUT
+          else
+            echo "run=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout code
+        if: steps.should_run.outputs.run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Download built module
+        if: steps.should_run.outputs.run == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: module
+
+      - name: Install SteamCMD
+        if: steps.should_run.outputs.run == 'true'
+        run: |
+          sudo add-apt-repository multiverse
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          # Accept Steam license non-interactively
+          echo steam steam/question select "I AGREE" | sudo debconf-set-selections
+          echo steam steam/license note '' | sudo debconf-set-selections
+          sudo apt-get install -y lib32gcc-s1 steamcmd
+
+      - name: Install Garry's Mod Dedicated Server (32-bit)
+        if: steps.should_run.outputs.run == 'true' && matrix.arch == 'x86'
+        run: |
+          mkdir -p ~/gmod
+          steamcmd +force_install_dir ~/gmod +login anonymous +app_update 4020 validate +quit
+
+      - name: Install Garry's Mod Dedicated Server (64-bit)
+        if: steps.should_run.outputs.run == 'true' && matrix.arch == 'x64'
+        run: |
+          mkdir -p ~/gmod
+          steamcmd +force_install_dir ~/gmod +login anonymous +app_update 4020 -beta x86-64 validate +quit
+
+      - name: Setup test environment
+        if: steps.should_run.outputs.run == 'true'
+        run: |
+          # Copy the built module to garrysmod/lua/bin
+          mkdir -p ~/gmod/garrysmod/lua/bin
+          cp module/${{ matrix.artifact_name }} ~/gmod/garrysmod/lua/bin/
+
+          # Copy integration test addon
+          mkdir -p ~/gmod/garrysmod/addons/mysqloo_tests
+          cp -r IntegrationTest/lua ~/gmod/garrysmod/addons/mysqloo_tests/
+
+          # Configure database connection (overwrite the init.lua with CI settings)
+          cat > ~/gmod/garrysmod/addons/mysqloo_tests/lua/autorun/server/init.lua << 'EOF'
+          -- Auto-generated database config for CI
+          DatabaseSettings = {
+              Host = "127.0.0.1",
+              Port = 3306,
+              Username = "root",
+              Password = "testpassword",
+              Database = "mysqloo_test"
+          }
+
+          print("Loading MySQLOO Testing Framework")
+          include("mysqloo/init.lua")
+          EOF
+
+          # Create autorun script to start tests and shutdown server
+          mkdir -p ~/gmod/garrysmod/lua/autorun/server
+          cat > ~/gmod/garrysmod/lua/autorun/server/ci_test_runner.lua << 'EOF'
+          -- CI Test Runner - automatically starts tests and shuts down server
+          hook.Add("IntegrationTestsCompleted", "IntegrationHookReporter", function(success)
+              if (success) then
+                  print("All tests passed")
+              else
+                  print("Some tests failed")
+              end
+              print("CI: Tests completed, shutting down server...")
+              engine.CloseServer()
+          end)
+          timer.Simple(1, function()
+              print("CI: Starting integration tests...")
+              RunConsoleCommand("mysqloo_start_tests")
+          end)
+          EOF
+
+      - name: Run tests
+        if: steps.should_run.outputs.run == 'true'
+        timeout-minutes: 5
+        run: |
+          cd ~/gmod
+          timeout 180s ./${{ matrix.srcds_binary }} -game garrysmod -console -condebug -norestart -allowquit +map gm_flatgrass +sv_hibernate_think 1 +maxplayers 1 || true
+
+      - name: Check test results
+        if: steps.should_run.outputs.run == 'true'
+        run: |
+          # Parse server logs for test results
+          if grep -q "All tests passed" ~/gmod/garrysmod/console.log; then
+            echo "✅ Integration tests passed!"
+            exit 0
+          elif grep -q "Some tests failed" ~/gmod/garrysmod/console.log; then
+            echo "❌ Integration tests failed!"
+            cat ~/gmod/garrysmod/console.log
+            exit 1
+          else
+            echo "⚠️  Could not determine test status"
+            cat ~/gmod/garrysmod/console.log
+            exit 1
+          fi
+
+      - name: Upload server logs
+        if: always() && steps.should_run.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-logs-${{ matrix.arch }}
+          path: ~/gmod/garrysmod/console.log
+          if-no-files-found: warn
