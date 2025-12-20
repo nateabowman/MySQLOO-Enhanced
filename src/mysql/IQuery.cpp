@@ -31,6 +31,11 @@ QueryResultStatus IQuery::getResultStatus() const {
 
 //Returns if the query has been queued with the database instance
 bool IQuery::isRunning() {
+    // If callbackQueryData is set, the query has completed (either successfully or with error)
+    // So it's no longer running, even if the data is still in runningQueryData
+    if (callbackQueryData != nullptr) {
+        return false;
+    }
     return !runningQueryData.empty();
 }
 

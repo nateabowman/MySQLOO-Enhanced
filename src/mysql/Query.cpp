@@ -51,6 +51,10 @@ bool Query::hasMoreResults() {
 	if (!hasCallbackData()) {
         throw MySQLOOException("Query not completed yet");
 	}
+	// If the query has an error, it doesn't have more results
+	if (callbackQueryData->getResultStatus() == QUERY_ERROR) {
+		return false;
+	}
     auto data = std::dynamic_pointer_cast<QueryData>(this->callbackQueryData);
     return data->hasMoreResults();
 }

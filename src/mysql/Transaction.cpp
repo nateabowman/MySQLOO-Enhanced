@@ -60,8 +60,16 @@ void Transaction::executeStatement(Database &database, MYSQL *connection, const 
                 // The query did not have a result set yet because it never finished, so we need to give it an empty one
                 Query::emplaceEmptyResultData(query.second);
                 query.second->setStatus(QUERY_ABORTED);
+                // Set the error message for queries that never executed (they should report the transaction error)
+                // Only set it if it's not already set (the query that threw the exception already has its error set)
+                if (query.second->getError().empty()) {
+                    query.second->setError(error.what());
+                }
             } else {
+                // Query completed (either successfully or with its own error that was already set)
                 query.second->setStatus(QUERY_COMPLETE);
+                // Don't overwrite the error if the query already completed successfully
+                // Only set error if it's not already set (shouldn't happen for successful queries, but be safe)
             }
         }
         throw error;
