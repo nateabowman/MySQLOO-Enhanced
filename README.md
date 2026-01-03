@@ -166,10 +166,17 @@ Database:setCharacterSet(charSetName)
 -- Please note that this does block the main server thread if there is a query currently being ran
 -- Returns true on success, false on failure
 
-Database:setSSLSettings(key, cert, ca, capath, cipher)
+Database:setSSLSettings(key, cert, ca, capath, cipher [, ssl_mode])
 -- Returns nothing
 -- Sets the SSL configuration of the database object. This allows you to enable secure connections over the internet using TLS.
+-- **By default, SSL is DISABLED** unless you explicitly call this function.
 -- Every parameter is optional and can be omitted (set to nil) if not required.
+-- ssl_mode (optional 6th parameter): 0 = DISABLED, 1 = PREFERRED, 2 = REQUIRED
+--   - DISABLED (0): Never use SSL, even if the server supports it (default if not called)
+--   - PREFERRED (1): Use SSL if available, but allow non-SSL connections if the server doesn't support it
+--   - REQUIRED (2): Require SSL connection (will fail if server doesn't support SSL)
+-- If SSL certificate parameters (key, cert, ca, etc.) are provided but ssl_mode is not specified, it defaults to PREFERRED (1).
+-- If you're getting "SSL is required, but the server does not support it" errors, don't call this function, or set ssl_mode to 0.
 -- See https://dev.mysql.com/doc/c-api/8.0/en/mysql-ssl-set.html for the description of each parameter.
 
 Database:setReadTimeout(timeout)

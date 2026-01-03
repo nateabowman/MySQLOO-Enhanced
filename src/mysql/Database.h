@@ -26,6 +26,8 @@ struct SSLSettings {
     std::string ca;
     std::string capath;
     std::string cipher;
+    int ssl_mode = 0; // 0=DISABLED, 1=PREFERRED, 2=REQUIRED (default: DISABLED)
+    bool ssl_explicitly_set = false; // Track if SSL settings were explicitly configured
 
     void applySSLSettings(MYSQL *m_sql) const;
 };

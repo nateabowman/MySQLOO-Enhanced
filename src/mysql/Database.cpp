@@ -175,6 +175,23 @@ void Database::connect() {
 }
 
 void SSLSettings::applySSLSettings(MYSQL *m_sql) const {
+    // If SSL settings were not explicitly set, don't apply any SSL options (default: disabled)
+    if (!this->ssl_explicitly_set) {
+        return;
+    }
+    
+    // If SSL is explicitly disabled, don't set any SSL options
+    if (this->ssl_mode == 0) {
+        return;
+    }
+    
+    // Try to set SSL mode if available (for newer MariaDB versions)
+    #ifdef MYSQL_OPT_SSL_MODE
+    unsigned int ssl_mode_value = static_cast<unsigned int>(this->ssl_mode);
+    mysql_options(m_sql, MYSQL_OPT_SSL_MODE, &ssl_mode_value);
+    #endif
+    
+    // Set SSL certificate options if provided
     if (!this->key.empty()) {
         mysql_options(m_sql, MYSQL_OPT_SSL_KEY, this->key.c_str());
     }

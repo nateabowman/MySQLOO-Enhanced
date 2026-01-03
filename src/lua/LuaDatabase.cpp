@@ -143,6 +143,10 @@ MYSQLOO_LUA_FUNCTION(setCharacterSet) {
 MYSQLOO_LUA_FUNCTION(setSSLSettings) {
     auto database = LuaObject::getLuaObject<LuaDatabase>(LUA);
     SSLSettings sslSettings;
+    
+    // Mark that SSL settings are being explicitly set
+    sslSettings.ssl_explicitly_set = true;
+    
     if (LUA->IsType(2, GarrysMod::Lua::Type::String)) {
         sslSettings.key = LUA->GetString(2);
     }
@@ -157,6 +161,19 @@ MYSQLOO_LUA_FUNCTION(setSSLSettings) {
     }
     if (LUA->IsType(6, GarrysMod::Lua::Type::String)) {
         sslSettings.cipher = LUA->GetString(6);
+    }
+    // Optional 7th parameter: SSL mode (0=DISABLED, 1=PREFERRED, 2=REQUIRED)
+    if (LUA->IsType(7, GarrysMod::Lua::Type::Number)) {
+        sslSettings.ssl_mode = static_cast<int>(LUA->GetNumber(7));
+    } else {
+        // If SSL certificate parameters are provided but ssl_mode not specified,
+        // default to PREFERRED mode (use SSL if available)
+        bool hasSSLCertParams = !sslSettings.key.empty() || !sslSettings.cert.empty() || 
+                                 !sslSettings.ca.empty() || !sslSettings.capath.empty() || 
+                                 !sslSettings.cipher.empty();
+        if (hasSSLCertParams) {
+            sslSettings.ssl_mode = 1; // PREFERRED
+        }
     }
     database->m_database->setSSLSettings(sslSettings);
     return 0;
